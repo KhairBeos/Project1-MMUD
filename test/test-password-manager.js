@@ -1,7 +1,7 @@
 "use strict";
 
-let expect = require('expect.js');
-const { Keychain } = require('../password-manager');
+import expect from 'expect.js';
+import { Keychain } from '../password-manager';
 
 function expectReject(promise) {
     return promise.then(
