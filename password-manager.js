@@ -1,14 +1,24 @@
 "use strict";
 
+import { stringify } from "querystring";
 /********* External Imports ********/
 
-const { stringToBuffer, bufferToString, encodeBuffer, decodeBuffer, getRandomBytes } = require("./lib");
-const { subtle } = require('crypto').webcrypto;
+import {
+  stringToBuffer,
+  bufferToString,
+  encodeBuffer,
+  decodeBuffer,
+  getRandomBytes,
+} from "./lib";
+import { webcrypto } from "crypto";
+import { parse } from "path";
+import { version } from "os";
+const { subtle } = webcrypto;
 
 /********* Constants ********/
 
 const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
-const MAX_PASSWORD_LENGTH = 64;   // we can assume no password is longer than this many characters
+const MAX_PASSWORD_LENGTH = 64; // we can assume no password is longer than this many characters
 const SALT_LEN = 16; // 128-bit
 const IV_LEN = 12; // 96-bit (chuẩn tốt cho AES-GCM)
 const AUTH_ENTRY_NAME = "__auth_entry__";
@@ -19,9 +29,9 @@ class Keychain {
   /**
    * Initializes the keychain using the provided information. Note that external
    * users should likely never invoke the constructor directly and instead use
-   * either Keychain.init or Keychain.load. 
+   * either Keychain.init or Keychain.load.
    * Arguments:
-   *  You may design the constructor with any parameters you would like. 
+   *  You may design the constructor with any parameters you would like.
    * Return Type: void
    */
   /** 
@@ -33,22 +43,22 @@ class Keychain {
 
   constructor() {
     // Tạo thuộc tính this.data để lưu thông tin công khai
-    this.data = { 
+    this.data = {
       salt: encodeBuffer(saltBytes), // chuyển đổi salt từ bytes sang base64 để có thể serialize
-      kvs: Object.assign({}, kvs) // tạo bản sao của object kvs để tránh thay đổi object gốc
+      kvs: Object.assign({}, kvs), // tạo bản sao của object kvs để tránh thay đổi object gốc
     };
 
     // Tạo thuộc tính this.secrets để lưu các khóa bí mật
     this.secrets = {
       hmacKeyBytes: new Uint8Array(hmacKeyBytes), // tạo bản sao của khóa HMAC
-      aesKeyBytes: new Uint8Array(aesKeyBytes) // tạo bản sao của khóa AES
+      aesKeyBytes: new Uint8Array(aesKeyBytes), // tạo bản sao của khóa AES
     };
-    
+
     // Khởi tạo cache cho các CryptoKey
     this._hmacCryptoKey = null; // CryptoKey cho HMAC
-    this._aesCryptoKey = null;  // CryptoKey cho AES-GCM
+    this._aesCryptoKey = null; // CryptoKey cho AES-GCM
     // Mục đích: tránh phải import khóa nhiều lần, tăng hiệu suất
-  };
+  }
 
   //WebCrypto API yêu cầu khóa phải ở dạng CryptoKey để sử dụng
   async _importHmacKeyIfNeeded() {
@@ -83,7 +93,9 @@ class Keychain {
     const buf = stringToBuffer(str);
     const digest = await subtle.digest("SHA-256", buf);
     const b = new Uint8Array(digest);
-    return Array.from(b).map(x => x.toString(16).padStart(2,'0')).join('');
+    return Array.from(b)
+      .map((x) => x.toString(16).padStart(2, "0"))
+      .join("");
   }
 
   /* ------------------- Padding helpers ------------------- */
@@ -142,7 +154,7 @@ class Keychain {
     ); // ArrayBuffer (ciphertext || tag)
     return {
       iv: encodeBuffer(iv),
-      ct: encodeBuffer(new Uint8Array(cipherBuf))
+      ct: encodeBuffer(new Uint8Array(cipherBuf)),
     };
   }
 
@@ -160,40 +172,67 @@ class Keychain {
     return new Uint8Array(plainBuf);
   }
 
-  /** 
-    * Creates an empty keychain with the given password.
-    *
-    * Arguments:
-    *   password: string
-    * Return Type: void
-    */
+  /**
+   * Creates an empty keychain with the given password.
+   *
+   * Arguments:
+   *   password: string
+   * Return Type: void
+   */
   static async init(password) {
     // 1) Salt: 16 bytes ngẫu nhiên để tăng cường PBKDF2
     const salt = getRandomBytes(SALT_LEN);
 
     // 2) PBKDF2: Tăng cường password bằng cách lặp 100,000 lần
-    const passKey = await subtle.importKey("raw", stringToBuffer(password), "PBKDF2", false, ["deriveBits"]);
+    const passKey = await subtle.importKey(
+      "raw",
+      stringToBuffer(password),
+      "PBKDF2",
+      false,
+      ["deriveBits"]
+    );
     const derivedBits = await subtle.deriveBits(
-      { name: "PBKDF2", salt: salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+      {
+        name: "PBKDF2",
+        salt: salt,
+        iterations: PBKDF2_ITERATIONS,
+        hash: "SHA-256",
+      },
       passKey,
       256
     );
     const masterRaw = new Uint8Array(derivedBits); // 32 bytes
 
     // 3) Tạo 2 khóa con từ master key
-    const masterHmacKey = await subtle.importKey("raw", masterRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const hmacKeyBytesBuf = await subtle.sign("HMAC", masterHmacKey, stringToBuffer("hmac-key")); //Label để tạo khóa HMAC
-    const aesKeyBytesBuf  = await subtle.sign("HMAC", masterHmacKey, stringToBuffer("aes-key")); //Label để tạo khóa AES
+    const masterHmacKey = await subtle.importKey(
+      "raw",
+      masterRaw,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const hmacKeyBytesBuf = await subtle.sign(
+      "HMAC",
+      masterHmacKey,
+      stringToBuffer("hmac-key")
+    ); //Label để tạo khóa HMAC
+    const aesKeyBytesBuf = await subtle.sign(
+      "HMAC",
+      masterHmacKey,
+      stringToBuffer("aes-key")
+    ); //Label để tạo khóa AES
 
     const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); // use 32 bytes
-    const aesKeyBytes  = new Uint8Array(aesKeyBytesBuf).slice(0, 32);  // use 32 bytes (AES-256)
+    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); // use 32 bytes (AES-256)
 
     // 4) Tạo instance Keychain với các khóa đã tạo
     const kc = new Keychain(salt, hmacKeyBytes, aesKeyBytes, {});
 
     // 5) Authentication entry: Tạo entry đặc biệt để verify password
     const authKvsKey = await kc._computeKvsKeyBase64(AUTH_ENTRY_NAME); //AUTH_ENTRY_NAME: Tên cố định "auth_entry"
-    const padded = kc._padPasswordBytes(new Uint8Array(stringToBuffer(AUTH_PLAINTEXT))); //AUTH_PLAINTEXT: Text cố định "keychain-auth-v1"
+    const padded = kc._padPasswordBytes(
+      new Uint8Array(stringToBuffer(AUTH_PLAINTEXT))
+    ); //AUTH_PLAINTEXT: Text cố định "keychain-auth-v1"
     const enc = await kc._encryptAesGcm(padded, authKvsKey);
     kc.data.kvs[authKvsKey] = { iv: enc.iv, ct: enc.ct };
     // Khi load(), sẽ decrypt entry này để kiểm tra password đúng
@@ -210,80 +249,153 @@ class Keychain {
    */
 
   /**
-    * Loads the keychain state from the provided representation (repr). The
-    * repr variable will contain a JSON encoded serialization of the contents
-    * of the KVS (as returned by the dump function). The trustedDataCheck
-    * is an *optional* SHA-256 checksum that can be used to validate the 
-    * integrity of the contents of the KVS. If the checksum is provided and the
-    * integrity check fails, an exception should be thrown. You can assume that
-    * the representation passed to load is well-formed (i.e., it will be
-    * a valid JSON object).Returns a Keychain object that contains the data
-    * from repr. 
-    *
-    * Arguments:
-    *   password:           string
-    *   repr:               string
-    *   trustedDataCheck: string
-    * Return Type: Keychain
-    */
+   * Loads the keychain state from the provided representation (repr). The
+   * repr variable will contain a JSON encoded serialization of the contents
+   * of the KVS (as returned by the dump function). The trustedDataCheck
+   * is an *optional* SHA-256 checksum that can be used to validate the
+   * integrity of the contents of the KVS. If the checksum is provided and the
+   * integrity check fails, an exception should be thrown. You can assume that
+   * the representation passed to load is well-formed (i.e., it will be
+   * a valid JSON object).Returns a Keychain object that contains the data
+   * from repr.
+   *
+   * Arguments:
+   *   password:           string
+   *   repr:               string
+   *   trustedDataCheck: string
+   * Return Type: Keychain
+   */
   static async load(password, repr, trustedDataCheck) {
-    throw "Not Implemented!";
-  };
+    // repr is arr[0], trustedDataCheck is arr[1] checksum
+    const obj = JSON.parse(repr);
+    const saltBytes = decodeBuffer(obj.salt);
+    const kvs = obj.kvs;
+    if (trustedDataCheck) {
+      checksum = await Keychain._sha256HexOfString(repr);
+      if (trustedDataCheck !== checksum)
+        throw new Error("Integrity check failed!");
+    }
+
+    const passKey = await subtle.importKey(
+      "raw",
+      stringToBuffer(password),
+      "PBKDF2",
+      false,
+      ["deriveBits"]
+    );
+    const derivedBits = await subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        salt: saltBytes,
+        iterations: PBKDF2_ITERATIONS,
+        hash: "SHA-256",
+      },
+      passKey,
+      256
+    );
+    const masterRaw = new Uint8Array(derivedBits); // 32 bytes
+
+    // 3) Tạo 2 khóa con từ master key
+    const masterHmacKey = await subtle.importKey(
+      "raw",
+      masterRaw,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const hmacKeyBytesBuf = await subtle.sign(
+      "HMAC",
+      masterHmacKey,
+      stringToBuffer("hmac-key")
+    ); //Label để tạo khóa HMAC
+    const aesKeyBytesBuf = await subtle.sign(
+      "HMAC",
+      masterHmacKey,
+      stringToBuffer("aes-key")
+    ); //Label để tạo khóa AES
+
+    const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); // use 32 bytes
+    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); // use 32 bytes (AES-256)
+
+    // 4) Tạo instance Keychain với các khóa đã tạo
+    const kc = new Keychain(saltBytes, hmacKeyBytes, aesKeyBytes, kvs);
+
+    // kiểm tra auth_entry
+    const authKvsKey = await kc._computeKvsKeyBase64(AUTH_ENTRY_NAME);
+    const authEnc = kc.data.kvs[authKvsKey];
+    if (!authEnc) throw new Error("Auth entry missing.");
+    try {
+      const plain = await kc._decryptAesGcm(authEnc.iv, authEnc.ct, authKvsKey);
+      const unpadded = kc._unpadPasswordBytes(plain);
+      const text = bufferToString(unpadded);
+      if (text !== AUTH_PLAINTEXT) throw new Error("Invalid password.");
+    } catch (e) {
+      throw new Error("Invalid password — authentication failed.");
+    }
+
+    return kc;
+  }
 
   /**
-    * Returns a JSON serialization of the contents of the keychain that can be 
-    * loaded back using the load function. The return value should consist of
-    * an array of two strings:
-    *   arr[0] = JSON encoding of password manager
-    *   arr[1] = SHA-256 checksum (as a string)
-    * As discussed in the handout, the first element of the array should contain
-    * all of the data in the password manager. The second element is a SHA-256
-    * checksum computed over the password manager to preserve integrity.
-    *
-    * Return Type: array
-    */ 
+   * Returns a JSON serialization of the contents of the keychain that can be
+   * loaded back using the load function. The return value should consist of
+   * an array of two strings:
+   *   arr[0] = JSON encoding of password manager
+   *   arr[1] = SHA-256 checksum (as a string)
+   * As discussed in the handout, the first element of the array should contain
+   * all of the data in the password manager. The second element is a SHA-256
+   * checksum computed over the password manager to preserve integrity.
+   *
+   * Return Type: array
+   */
   async dump() {
-    throw "Not Implemented!";
-  };
+    const payload = {
+      version: 1,
+      data: Object.assign({}, this.data), //clone để tránh trỏ vào this.data
+    };
+    const JSONstring = JSON.stringify(payload.data);
+    const checksum = await Keychain._sha256HexOfString(JSONstring);
+    return [JSONstring, checksum];
+  }
 
   /**
-    * Fetches the data (as a string) corresponding to the given domain from the KVS.
-    * If there is no entry in the KVS that matches the given domain, then return
-    * null.
-    *
-    * Arguments:
-    *   name: string
-    * Return Type: Promise<string>
-    */
+   * Fetches the data (as a string) corresponding to the given domain from the KVS.
+   * If there is no entry in the KVS that matches the given domain, then return
+   * null.
+   *
+   * Arguments:
+   *   name: string
+   * Return Type: Promise<string>
+   */
   async get(name) {
     throw "Not Implemented!";
-  };
-
-  /** 
-  * Inserts the domain and associated data into the KVS. If the domain is
-  * already in the password manager, this method should update its value. If
-  * not, create a new entry in the password manager.
-  *
-  * Arguments:
-  *   name: string
-  *   value: string
-  * Return Type: void
-  */
-  async set(name, value) {
-    throw "Not Implemented!";
-  };
+  }
 
   /**
-    * Removes the record with name from the password manager. Returns true
-    * if the record with the specified name is removed, false otherwise.
-    *
-    * Arguments:
-    *   name: string
-    * Return Type: Promise<boolean>
-  */
+   * Inserts the domain and associated data into the KVS. If the domain is
+   * already in the password manager, this method should update its value. If
+   * not, create a new entry in the password manager.
+   *
+   * Arguments:
+   *   name: string
+   *   value: string
+   * Return Type: void
+   */
+  async set(name, value) {
+    throw "Not Implemented!";
+  }
+
+  /**
+   * Removes the record with name from the password manager. Returns true
+   * if the record with the specified name is removed, false otherwise.
+   *
+   * Arguments:
+   *   name: string
+   * Return Type: Promise<boolean>
+   */
   async remove(name) {
     throw "Not Implemented!";
-  };
-};
+  }
+}
 
-module.exports = { Keychain }
+export default { Keychain };

@@ -1,6 +1,6 @@
 "use strict";
 
-const { getRandomValues } = require('crypto');
+import { getRandomValues } from 'crypto';
 
 /**
  * Converts a plaintext string into a buffer for use in SubtleCrypto functions.
@@ -48,7 +48,7 @@ function getRandomBytes(len) {
     return getRandomValues(new Uint8Array(len))
 }
 
-module.exports = {
+export default {
     stringToBuffer,
     bufferToString,
     encodeBuffer,
