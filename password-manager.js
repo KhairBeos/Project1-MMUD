@@ -269,7 +269,8 @@ class Keychain {
     // repr is arr[0], trustedDataCheck is arr[1] checksum
     const obj = JSON.parse(repr);
     const saltBytes = decodeBuffer(obj.salt);
-    const kvs = obj.kvs;
+    const serializedKvs = obj.kvs || {};
+    const serializedAuth = obj.auth;
     if (trustedDataCheck) {
       const checksum = await Keychain._sha256HexOfString(repr);
       if (trustedDataCheck !== checksum)
@@ -317,11 +318,11 @@ class Keychain {
     const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); // use 32 bytes
     const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); // use 32 bytes (AES-256)
 
-    // 4) Tạo instance Keychain với các khóa đã tạo
-    const kc = new Keychain(saltBytes, hmacKeyBytes, aesKeyBytes, kvs);
-
-    // kiểm tra auth_entry
-    const authKvsKey = await kc._computeKvsKeyBase64(AUTH_ENTRY_NAME);
+    const kvsWithAuth = Object.assign({}, serializedKvs);
+    const tempKeychain = new Keychain(saltBytes, hmacKeyBytes, aesKeyBytes, {});
+    const authKvsKey = await tempKeychain._computeKvsKeyBase64(AUTH_ENTRY_NAME);
+    kvsWithAuth[authKvsKey] = serializedAuth;
+    const kc = new Keychain(saltBytes, hmacKeyBytes, aesKeyBytes, kvsWithAuth);
     const authEnc = kc.data.kvs[authKvsKey];
     if (!authEnc) throw new Error("Auth entry missing.");
     try {
@@ -349,14 +350,21 @@ class Keychain {
    * Return Type: array
    */
   async dump() {
+    const authKey = await this._computeKvsKeyBase64(AUTH_ENTRY_NAME);
+    const authEntry = this.data.kvs[authKey];
+
+    const sanitizedKvs = Object.assign({}, this.data.kvs);
+    delete sanitizedKvs[authKey];
+
     const payload = {
-      version: 1,
-      data: Object.assign({}, this.data), //clone để tránh trỏ vào this.data
+      salt: this.data.salt,
+      kvs: sanitizedKvs,
+      auth: authEntry,
     };
 
-    const JSONstring = JSON.stringify(payload.data);
-    const checksum = await Keychain._sha256HexOfString(JSONstring);
-    return [JSONstring, checksum];
+    const jsonString = JSON.stringify(payload);
+    const checksum = await Keychain._sha256HexOfString(jsonString);
+    return [jsonString, checksum];
   }
 
   /**
