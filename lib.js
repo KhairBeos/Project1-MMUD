@@ -1,6 +1,6 @@
 "use strict";
 
-import { getRandomValues } from 'crypto';
+const { getRandomValues } = require("crypto");
 
 /**
  * Converts a plaintext string into a buffer for use in SubtleCrypto functions.
@@ -8,7 +8,7 @@ import { getRandomValues } from 'crypto';
  * @returns {Buffer} A buffer representation for use in SubtleCrypto functions
  */
 function stringToBuffer(str) {
-    return Buffer.from(str);
+  return Buffer.from(str);
 }
 
 /**
@@ -17,7 +17,7 @@ function stringToBuffer(str) {
  * @returns {string} The original string
  */
 function bufferToString(buf) {
-    return Buffer.from(buf).toString();
+  return Buffer.from(buf).toString();
 }
 
 /**
@@ -27,7 +27,7 @@ function bufferToString(buf) {
  * @returns {string} A Base64 string representing the bytes in the buffer
  */
 function encodeBuffer(buf) {
-    return Buffer.from(buf).toString('base64');
+  return Buffer.from(buf).toString("base64");
 }
 
 /**
@@ -36,7 +36,7 @@ function encodeBuffer(buf) {
  * @returns {Buffer} A Buffer object
  */
 function decodeBuffer(base64) {
-    return Buffer.from(base64, "base64")
+  return Buffer.from(base64, "base64");
 }
 
 /**
@@ -45,13 +45,13 @@ function decodeBuffer(base64) {
  * @returns {Uint8Array} A buffer of `len` random bytes
  */
 function getRandomBytes(len) {
-    return getRandomValues(new Uint8Array(len))
+  return getRandomValues(new Uint8Array(len));
 }
 
-export default {
-    stringToBuffer,
-    bufferToString,
-    encodeBuffer,
-    decodeBuffer,
-    getRandomBytes
-}
+module.exports = {
+  stringToBuffer,
+  bufferToString,
+  encodeBuffer,
+  decodeBuffer,
+  getRandomBytes,
+};
