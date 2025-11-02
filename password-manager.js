@@ -1,19 +1,19 @@
 "use strict";
 
-import { stringify } from "querystring";
+//import { stringify } from "querystring";
 /********* External Imports ********/
 
-import {
+const {
   stringToBuffer,
   bufferToString,
   encodeBuffer,
   decodeBuffer,
   getRandomBytes,
-} from "./lib";
-import { webcrypto } from "crypto";
-import { parse } from "path";
-import { version } from "os";
-const { subtle } = webcrypto;
+} = require("./lib.js");
+const { webcrypto } = require("crypto");
+//import { parse } from "path";
+//import { version } from "os";
+const subtle = webcrypto.subtle;
 
 /********* Constants ********/
 
@@ -41,7 +41,7 @@ class Keychain {
   @param {Object} kvs // map base64(HMAC(domain)) -> { iv: b64, ct: b64 }
   */
 
-  constructor() {
+  constructor(saltBytes, hmacKeyBytes, aesKeyBytes, kvs) {
     // Tạo thuộc tính this.data để lưu thông tin công khai
     this.data = {
       salt: encodeBuffer(saltBytes), // chuyển đổi salt từ bytes sang base64 để có thể serialize
@@ -271,7 +271,7 @@ class Keychain {
     const saltBytes = decodeBuffer(obj.salt);
     const kvs = obj.kvs;
     if (trustedDataCheck) {
-      checksum = await Keychain._sha256HexOfString(repr);
+      const checksum = await Keychain._sha256HexOfString(repr);
       if (trustedDataCheck !== checksum)
         throw new Error("Integrity check failed!");
     }
@@ -353,6 +353,7 @@ class Keychain {
       version: 1,
       data: Object.assign({}, this.data), //clone để tránh trỏ vào this.data
     };
+
     const JSONstring = JSON.stringify(payload.data);
     const checksum = await Keychain._sha256HexOfString(JSONstring);
     return [JSONstring, checksum];
@@ -368,7 +369,18 @@ class Keychain {
    * Return Type: Promise<string>
    */
   async get(name) {
-    throw "Not Implemented!";
+    // Tính kvsKey (HMAC domain -> base64)
+    const kvsKey = await this._computeKvsKeyBase64(name);
+    const record = this.data.kvs[kvsKey];
+    if (!record) return null;
+    try {
+      // Giải mã bằng AES-GCM, AAD = kvsKey
+      const plain = await this._decryptAesGcm(record.iv, record.ct, kvsKey);
+      const unpadded = this._unpadPasswordBytes(plain);
+      return bufferToString(unpadded);
+    } catch (e) {
+      throw new Error("Tampering detected or invalid ciphertext!");
+    }
   }
 
   /**
@@ -382,7 +394,16 @@ class Keychain {
    * Return Type: void
    */
   async set(name, value) {
-    throw "Not Implemented!";
+    // Tính kvsKey
+    const kvsKey = await this._computeKvsKeyBase64(name);
+    // Pad value
+    const padded = this._padPasswordBytes(
+      new Uint8Array(stringToBuffer(value))
+    );
+    // Mã hóa bằng AES-GCM
+    const enc = await this._encryptAesGcm(padded, kvsKey);
+    // Lưu vào kvs
+    this.data.kvs[kvsKey] = { iv: enc.iv, ct: enc.ct };
   }
 
   /**
@@ -394,8 +415,13 @@ class Keychain {
    * Return Type: Promise<boolean>
    */
   async remove(name) {
-    throw "Not Implemented!";
+    const kvsKey = await this._computeKvsKeyBase64(name);
+    if (this.data.kvs.hasOwnProperty(kvsKey)) {
+      delete this.data.kvs[kvsKey];
+      return true;
+    }
+    return false;
   }
 }
 
-export default { Keychain };
+module.exports = { Keychain };
