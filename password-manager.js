@@ -11,20 +11,18 @@ const {
   getRandomBytes,
 } = require("./lib.js");
 const { webcrypto } = require("crypto");
-//import { parse } from "path";
-//import { version } from "os";
+
 const subtle = webcrypto.subtle;
 
-/********* Constants ********/
 
-const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
+const PBKDF2_ITERATIONS = 100000; 
 const MAX_PASSWORD_LENGTH = 64; // we can assume no password is longer than this many characters
-const SALT_LEN = 16; // 128-bit
-const IV_LEN = 12; // 96-bit (chuẩn tốt cho AES-GCM)
+const SALT_LEN = 16;
+const IV_LEN = 12; 
 const AUTH_ENTRY_NAME = "__auth_entry__";
 const AUTH_PLAINTEXT = "keychain-auth-v1";
 
-/********* Implementation ********/
+
 class Keychain {
   /**
    * Initializes the keychain using the provided information. Note that external
@@ -42,34 +40,30 @@ class Keychain {
   */
 
   constructor(saltBytes, hmacKeyBytes, aesKeyBytes, kvs) {
-    // Tạo thuộc tính this.data để lưu thông tin công khai
+   
     this.data = {
-      salt: encodeBuffer(saltBytes), // chuyển đổi salt từ bytes sang base64 để có thể serialize
-      kvs: Object.assign({}, kvs), // tạo bản sao của object kvs để tránh thay đổi object gốc
+      salt: encodeBuffer(saltBytes), 
+      kvs: Object.assign({}, kvs), 
     };
-
-    // Tạo thuộc tính this.secrets để lưu các khóa bí mật
     this.secrets = {
-      hmacKeyBytes: new Uint8Array(hmacKeyBytes), // tạo bản sao của khóa HMAC
-      aesKeyBytes: new Uint8Array(aesKeyBytes), // tạo bản sao của khóa AES
+      hmacKeyBytes: new Uint8Array(hmacKeyBytes), 
+      aesKeyBytes: new Uint8Array(aesKeyBytes), 
     };
 
-    // Khởi tạo cache cho các CryptoKey
-    this._hmacCryptoKey = null; // CryptoKey cho HMAC
-    this._aesCryptoKey = null; // CryptoKey cho AES-GCM
-    // Mục đích: tránh phải import khóa nhiều lần, tăng hiệu suất
+    this._hmacCryptoKey = null; 
+    this._aesCryptoKey = null; 
+    
   }
-
-  //WebCrypto API yêu cầu khóa phải ở dạng CryptoKey để sử dụng
+ 
   async _importHmacKeyIfNeeded() {
-    //Mục đích: Import khóa HMAC từ raw bytes thành CryptoKey object
-    if (this._hmacCryptoKey) return this._hmacCryptoKey; // Kiểm tra cache trước, nếu đã có thì trả về luôn (lazy loading)
+    
+    if (this._hmacCryptoKey) return this._hmacCryptoKey; 
     this._hmacCryptoKey = await subtle.importKey(
-      "raw", //Định dạng khóa đầu vào là raw bytes
+      "raw", 
       this.secrets.hmacKeyBytes,
-      { name: "HMAC", hash: "SHA-256" }, // Cấu hình thuật toán HMAC với SHA-256
-      false, //Khóa không thể extract (bảo mật)
-      ["sign", "verify"] //Cho phép ký và xác minh HMAC
+      { name: "HMAC", hash: "SHA-256" }, 
+      false, 
+      ["sign", "verify"] 
     );
     return this._hmacCryptoKey;
   }
@@ -79,16 +73,13 @@ class Keychain {
     this._aesCryptoKey = await subtle.importKey(
       "raw",
       this.secrets.aesKeyBytes,
-      { name: "AES-GCM" }, //Sử dụng AES-GCM mode (có authentication)
+      { name: "AES-GCM" }, 
       false,
-      ["encrypt", "decrypt"] //Cho phép mã hóa và giải mã
+      ["encrypt", "decrypt"] 
     );
     return this._aesCryptoKey;
   }
 
-  //Tính SHA-256 hash của chuỗi, trả về dạng hex
-  //Để tạo checksum cho dữ liệu serialized (phát hiện tampering)
-  //String → Buffer → SHA-256 → Hex string
   static async _sha256HexOfString(str) {
     const buf = stringToBuffer(str);
     const digest = await subtle.digest("SHA-256", buf);
@@ -98,20 +89,15 @@ class Keychain {
       .join("");
   }
 
-  /* ------------------- Padding helpers ------------------- */
-
-  //Padding password để che giấu độ dài thực
   _padPasswordBytes(passwordBytesUint8) {
     if (passwordBytesUint8.length > MAX_PASSWORD_LENGTH) {
       throw new Error(`Password too long (max ${MAX_PASSWORD_LENGTH})`);
     }
-    const total = 1 + MAX_PASSWORD_LENGTH; //[1 byte độ dài][password bytes][random padding]
+    const total = 1 + MAX_PASSWORD_LENGTH; 
     const out = new Uint8Array(total);
-    out[0] = passwordBytesUint8.length; // Lưu độ dài thực của password
+    out[0] = passwordBytesUint8.length; 
     out.set(passwordBytesUint8, 1);
 
-    //Padding: Thêm bytes ngẫu nhiên để đạt độ dài tối đa
-    //Tất cả password đều có cùng độ dài sau padding
     const padLen = MAX_PASSWORD_LENGTH - passwordBytesUint8.length;
     if (padLen > 0) {
       const pad = getRandomBytes(padLen);
@@ -120,45 +106,34 @@ class Keychain {
     return out;
   }
 
-  //Khôi phục password gốc từ padded data
-  //Đọc độ dài từ byte đầu, cắt đúng số bytes
   _unpadPasswordBytes(paddedUint8) {
     const len = paddedUint8[0];
     return paddedUint8.slice(1, 1 + len);
   }
 
-  /* ------------------- KVS key computation (HMAC of domain) ------------------- */
-
-  //Tạo khóa duy nhất cho mỗi domain bằng HMAC
   async _computeKvsKeyBase64(domain) {
     await this._importHmacKeyIfNeeded();
     const key = this._hmacCryptoKey;
     const dataBuf = stringToBuffer(domain);
-    const macBuf = await subtle.sign("HMAC", key, dataBuf); // ArrayBuffer
-    // encodeBuffer accepts a buffer -> base64 (lib.js)
+    const macBuf = await subtle.sign("HMAC", key, dataBuf); 
     return encodeBuffer(new Uint8Array(macBuf));
   }
 
-  /* ------------------- AES-GCM encrypt/decrypt (AAD = kvsKeyBase64) ------------------- */
-
-  // plainUint8: Uint8Array; aadBase64: string
   async _encryptAesGcm(plainUint8, aadBase64) {
     await this._importAesKeyIfNeeded();
-    const iv = getRandomBytes(IV_LEN); //Initialization Vector ngẫu nhiên (12 bytes cho AES-GCM)
-    const aad = decodeBuffer(aadBase64); // Additional Authenticated Data (khóa KVS) để xác thực
-    //Mã hóa + xác thực trong một bước
+    const iv = getRandomBytes(IV_LEN); 
+    const aad = decodeBuffer(aadBase64); 
     const cipherBuf = await subtle.encrypt(
       { name: "AES-GCM", iv: iv, additionalData: aad, tagLength: 128 },
       this._aesCryptoKey,
       plainUint8
-    ); // ArrayBuffer (ciphertext || tag)
+    ); 
     return {
       iv: encodeBuffer(iv),
       ct: encodeBuffer(new Uint8Array(cipherBuf)),
     };
   }
 
-  // Giải mã và xác thực dữ liệu
   async _decryptAesGcm(ivBase64, ctBase64, aadBase64) {
     await this._importAesKeyIfNeeded();
     const iv = decodeBuffer(ivBase64);
@@ -168,7 +143,7 @@ class Keychain {
       { name: "AES-GCM", iv: iv, additionalData: aad, tagLength: 128 },
       this._aesCryptoKey,
       ct
-    ); //Nếu AAD không khớp, giải mã sẽ thất bại
+    ); 
     return new Uint8Array(plainBuf);
   }
 
@@ -180,10 +155,7 @@ class Keychain {
    * Return Type: void
    */
   static async init(password) {
-    // 1) Salt: 16 bytes ngẫu nhiên để tăng cường PBKDF2
     const salt = getRandomBytes(SALT_LEN);
-
-    // 2) PBKDF2: Tăng cường password bằng cách lặp 100,000 lần
     const passKey = await subtle.importKey(
       "raw",
       stringToBuffer(password),
@@ -201,9 +173,7 @@ class Keychain {
       passKey,
       256
     );
-    const masterRaw = new Uint8Array(derivedBits); // 32 bytes
-
-    // 3) Tạo 2 khóa con từ master key
+    const masterRaw = new Uint8Array(derivedBits); 
     const masterHmacKey = await subtle.importKey(
       "raw",
       masterRaw,
@@ -215,38 +185,24 @@ class Keychain {
       "HMAC",
       masterHmacKey,
       stringToBuffer("hmac-key")
-    ); //Label để tạo khóa HMAC
+    ); 
     const aesKeyBytesBuf = await subtle.sign(
       "HMAC",
       masterHmacKey,
       stringToBuffer("aes-key")
-    ); //Label để tạo khóa AES
+    ); 
 
-    const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); // use 32 bytes
-    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); // use 32 bytes (AES-256)
-
-    // 4) Tạo instance Keychain với các khóa đã tạo
+    const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); 
+    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); 
     const kc = new Keychain(salt, hmacKeyBytes, aesKeyBytes, {});
-
-    // 5) Authentication entry: Tạo entry đặc biệt để verify password
-    const authKvsKey = await kc._computeKvsKeyBase64(AUTH_ENTRY_NAME); //AUTH_ENTRY_NAME: Tên cố định "auth_entry"
+    const authKvsKey = await kc._computeKvsKeyBase64(AUTH_ENTRY_NAME); 
     const padded = kc._padPasswordBytes(
       new Uint8Array(stringToBuffer(AUTH_PLAINTEXT))
-    ); //AUTH_PLAINTEXT: Text cố định "keychain-auth-v1"
+    ); 
     const enc = await kc._encryptAesGcm(padded, authKvsKey);
     kc.data.kvs[authKvsKey] = { iv: enc.iv, ct: enc.ct };
-    // Khi load(), sẽ decrypt entry này để kiểm tra password đúng
     return kc;
   }
-
-  /**
-   * Tóm tắt kiến trúc bảo mật:
-      Password → Master Key: PBKDF2 với salt và 100,000 iterations
-      Master Key → Sub Keys: HMAC với labels khác nhau
-      Domain → KVS Key: HMAC của domain name
-      Data Encryption: AES-GCM với AAD là KVS key
-      Authentication: Entry đặc biệt để verify password khi load
-   */
 
   /**
    * Loads the keychain state from the provided representation (repr). The
@@ -266,7 +222,6 @@ class Keychain {
    * Return Type: Keychain
    */
   static async load(password, repr, trustedDataCheck) {
-    // repr is arr[0], trustedDataCheck is arr[1] checksum
     const obj = JSON.parse(repr);
     const saltBytes = decodeBuffer(obj.salt);
     const serializedKvs = obj.kvs || {};
@@ -276,7 +231,6 @@ class Keychain {
       if (trustedDataCheck !== checksum)
         throw new Error("Integrity check failed!");
     }
-
     const passKey = await subtle.importKey(
       "raw",
       stringToBuffer(password),
@@ -294,9 +248,7 @@ class Keychain {
       passKey,
       256
     );
-    const masterRaw = new Uint8Array(derivedBits); // 32 bytes
-
-    // 3) Tạo 2 khóa con từ master key
+    const masterRaw = new Uint8Array(derivedBits); 
     const masterHmacKey = await subtle.importKey(
       "raw",
       masterRaw,
@@ -308,15 +260,15 @@ class Keychain {
       "HMAC",
       masterHmacKey,
       stringToBuffer("hmac-key")
-    ); //Label để tạo khóa HMAC
+    ); 
     const aesKeyBytesBuf = await subtle.sign(
       "HMAC",
       masterHmacKey,
       stringToBuffer("aes-key")
-    ); //Label để tạo khóa AES
+    ); 
 
-    const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); // use 32 bytes
-    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); // use 32 bytes (AES-256)
+    const hmacKeyBytes = new Uint8Array(hmacKeyBytesBuf).slice(0, 32); 
+    const aesKeyBytes = new Uint8Array(aesKeyBytesBuf).slice(0, 32); 
 
     const kvsWithAuth = Object.assign({}, serializedKvs);
     const tempKeychain = new Keychain(saltBytes, hmacKeyBytes, aesKeyBytes, {});
@@ -377,12 +329,10 @@ class Keychain {
    * Return Type: Promise<string>
    */
   async get(name) {
-    // Tính kvsKey (HMAC domain -> base64)
     const kvsKey = await this._computeKvsKeyBase64(name);
     const record = this.data.kvs[kvsKey];
     if (!record) return null;
     try {
-      // Giải mã bằng AES-GCM, AAD = kvsKey
       const plain = await this._decryptAesGcm(record.iv, record.ct, kvsKey);
       const unpadded = this._unpadPasswordBytes(plain);
       return bufferToString(unpadded);
@@ -402,15 +352,11 @@ class Keychain {
    * Return Type: void
    */
   async set(name, value) {
-    // Tính kvsKey
     const kvsKey = await this._computeKvsKeyBase64(name);
-    // Pad value
     const padded = this._padPasswordBytes(
       new Uint8Array(stringToBuffer(value))
     );
-    // Mã hóa bằng AES-GCM
     const enc = await this._encryptAesGcm(padded, kvsKey);
-    // Lưu vào kvs
     this.data.kvs[kvsKey] = { iv: enc.iv, ct: enc.ct };
   }
 
